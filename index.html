@@ -97,34 +97,45 @@
 <script>
 /* =========================================================
    설정 — 여기만 만지면 됩니다
+   raw / center 는 GLB 파일을 직접 분석해서 나온 실측값입니다.
+   len 만 바꾸면 화면에 나오는 실제 길이가 바뀝니다.
    ========================================================= */
 var MODELS = [
-  { src: '#fish1', size: 0.40 },   // Fish1.glb — 길이 40cm
-  { src: '#fish2', size: 0.30 },   // Fish2.glb — 길이 30cm
-  { src: '#fish3', size: 0.55 }    // Fish3.glb — 길이 55cm
+  { src:'#fish1', len:0.40, raw: 7.87713, center:[0,  0.31180, -0.81436], animated:true  },
+  { src:'#fish2', len:0.30, raw:95.56850, center:[0,  0.00000,  0.00000], animated:false },
+  { src:'#fish3', len:0.55, raw:10.19428, center:[0, -0.50150, -1.56104], animated:true  }
 ];
 var START_COUNT = 12;              // 처음 나오는 총 마릿수 (주소 뒤에 ?n=20 으로도 바꿀 수 있음)
 var MAX_COUNT   = 40;
 var SIZE_JITTER = 0.4;             // 같은 종류라도 ±40% 크기 차이
 
 /* =========================================================
-   fit-size — GLB 원본 단위가 제각각이어도 지정한 길이로 맞춤
+   place-model — 실측값으로 크기와 중심을 맞춤
    ========================================================= */
-AFRAME.registerComponent('fit-size', {
-  schema: { size: {default: 0.4} },
+/* =========================================================
+   place-model — 실측값으로 크기와 중심을 맞춘다 (측정 없음)
+   ========================================================= */
+AFRAME.registerComponent('place-model', {
+  schema: {
+    len:    {default: 0.4},                       // 화면에 나올 길이 (m)
+    raw:    {default: 1},                         // GLB 원본의 가장 긴 변
+    center: {type: 'vec3', default: {x:0,y:0,z:0}} // GLB 원본의 중심점
+  },
   init: function () {
     var self = this;
-    this.el.addEventListener('model-loaded', function () {
-      var o = self.el.object3D;
-      o.scale.set(1, 1, 1);
-      var box = new THREE.Box3().setFromObject(o);
-      var s = new THREE.Vector3();
-      box.getSize(s);
-      var max = Math.max(s.x, s.y, s.z);
-      self.el.dataset.base = (max > 0.0001) ? (self.data.size / max) : 1;
-      if (modelEls.indexOf(self.el) === -1) modelEls.push(self.el);
-      applyScale();
-    });
+    this.el.dataset.base = this.data.len / this.data.raw;
+    if (modelEls.indexOf(this.el) === -1) modelEls.push(this.el);
+    applyScale();
+
+    function center() {
+      var mesh = self.el.getObject3D('mesh');
+      if (!mesh) return;
+      // 원점이 꼬리 끝인 모델이 많아서 몸 한가운데로 옮겨 준다
+      var c = self.data.center;
+      mesh.position.set(-c.x, -c.y, -c.z);
+    }
+    this.el.addEventListener('model-loaded', center);
+    if (this.el.getObject3D('mesh')) center();
   }
 });
 
@@ -138,7 +149,8 @@ AFRAME.registerComponent('wander', {
     rangeXZ:  {default: 3.5},
     rangeY:   {default: 0.9},
     minDist:  {default: 1.1},
-    yawOffset:{default: 0}
+    sway:     {default: 0},     // 뼈대 없는 모델용 좌우 몸짓
+    yawOffset:{default: 0}      // 세 모델 모두 머리가 +Z라 0이 맞습니다
   },
   init: function () {
     this.vel = new THREE.Vector3();
@@ -179,7 +191,8 @@ AFRAME.registerComponent('wander', {
     o.position.addScaledVector(this.vel, dt);
 
     var sp = this.vel.length();
-    var yaw = Math.atan2(this.vel.x, this.vel.z) + d.yawOffset;
+    var yaw = Math.atan2(this.vel.x, this.vel.z) + d.yawOffset
+              + Math.sin(this.t * 4.5) * d.sway;
     var pitch = sp > 0.001 ? -Math.asin(Math.max(-1, Math.min(1, this.vel.y / sp))) * 0.6 : 0;
     o.rotation.set(pitch, yaw, Math.sin(this.t * 5) * 0.12);
   },
@@ -210,14 +223,20 @@ function addFish() {
     turn:    rand(0.8, 2.0),
     rangeXZ: rand(2.5, 5.0),
     rangeY:  rand(0.6, 1.4),
-    minDist: rand(0.9, 1.5)
+    minDist: rand(0.9, 1.5),
+    // Fish2는 뼈대가 없어 꼬리를 못 흔들므로 몸 전체를 살짝 흔들어 준다
+    sway:    m.animated ? 0 : 0.18
   });
 
   var model = document.createElement('a-entity');
   model.setAttribute('class', 'model');
   model.setAttribute('gltf-model', m.src);
-  model.setAttribute('animation-mixer', '');
-  model.setAttribute('fit-size', { size: m.size * rand(1 - SIZE_JITTER, 1 + SIZE_JITTER) });
+  if (m.animated) model.setAttribute('animation-mixer', '');
+  model.setAttribute('place-model', {
+    len:    m.len * rand(1 - SIZE_JITTER, 1 + SIZE_JITTER),
+    raw:    m.raw,
+    center: { x: m.center[0], y: m.center[1], z: m.center[2] }
+  });
 
   var grab = document.createElement('a-sphere');
   grab.setAttribute('radius', 0.35);
