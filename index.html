@@ -2,57 +2,168 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+
+<!--
+  ============================================================================
+   GUBIMETA - 웹 AR 테스트 예제
+  ============================================================================
+
+  [ 이 코드가 하는 일 ]
+    휴대폰 카메라 영상 위에 3D 물고기들을 겹쳐서 보여줍니다.
+    앱 설치도, 마커 인쇄도 필요 없습니다. 웹 주소만 열면 됩니다.
+
+  [ 어떻게 AR처럼 보이게 만드는가 ]
+    진짜 AR 엔진을 쓰지 않고, 아래 세 가지를 겹쳐서 흉내 냅니다.
+
+      맨 아래층  <video>   : 카메라 영상 (z-index: 0)
+      중간층     <a-scene> : 투명 배경의 3D 화면 (z-index: 1)
+      맨 위층    <div>     : 버튼 같은 보통의 HTML UI (z-index: 20~30)
+
+    3D 화면의 배경을 투명하게 만들었기 때문에, 3D 물체가 없는 부분은
+    아래에 있는 카메라 영상이 그대로 비쳐 보입니다. 이게 핵심 아이디어입니다.
+
+    여기에 휴대폰의 자이로센서를 연결해서, 휴대폰을 돌리면 3D 카메라도
+    같이 돌게 만들었습니다. 그러면 물고기가 방 안 제자리에 떠 있는 것처럼
+    느껴집니다.
+
+  [ 이 방식의 한계 - 중요 ]
+    자이로센서는 "어느 방향을 보고 있는지"만 알려줄 뿐,
+    "어디로 걸어갔는지"는 모릅니다.
+    그래서 제자리에서 둘러보는 건 자연스럽지만, 앞으로 걸어가면
+    물고기가 나를 따라옵니다. 이걸 해결하려면 WebXR의 hit-test나
+    8th Wall 같은 상용 엔진이 필요하고, 난이도가 크게 올라갑니다.
+
+  [ 쓰인 라이브러리 ]
+    A-Frame       : three.js를 HTML 태그처럼 쓸 수 있게 해주는 라이브러리
+    aframe-extras : GLB 파일에 들어있는 애니메이션을 재생해주는 확장
+
+  [ 주의 ]
+    카메라는 https:// 또는 localhost 에서만 켜집니다.
+    HTML 파일을 더블클릭해서 여는 방식(file://)으로는 작동하지 않습니다.
+  ============================================================================
+-->
+
+<!--
+  viewport 설정 풀이
+    width=device-width  : 화면 폭을 기기 실제 폭에 맞춤
+    maximum-scale=1     : 사용자가 화면을 확대하지 못하게 함
+    user-scalable=no      (두 손가락 핀치를 우리가 직접 쓸 것이기 때문)
+    viewport-fit=cover  : 아이폰 노치 영역까지 화면을 채움
+-->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Fish AR</title>
 
+<!-- A-Frame 본체. 이 안에 three.js가 함께 들어있습니다. -->
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<!-- GLB에 내장된 애니메이션(꼬리 흔들기 등)을 재생해주는 animation-mixer -->
 <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
 
 <style>
-  :root { --ink:#06232e; --foam:#eaf6f8; --tide:#1fb6c9; --coral:#ff7a59; }
+  /* CSS 변수. 색을 한 곳에서 관리하면 나중에 바꾸기 쉽습니다. */
+  :root {
+    --ink:   #06232e;   /* 가장 어두운 남색 - 배경 */
+    --foam:  #eaf6f8;   /* 거의 흰색 - 글자 */
+    --tide:  #1fb6c9;   /* 청록색 - 강조, 버튼 */
+    --coral: #ff7a59;   /* 주황색 - 경고 */
+  }
+
+  /* padding을 넣어도 요소 크기가 커지지 않게 함. 레이아웃 계산이 쉬워집니다. */
   * { box-sizing:border-box; }
+
   html, body {
-    margin:0; height:100%; overflow:hidden; background:var(--ink);
-    touch-action:none;
-    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    margin:0; height:100%;
+    overflow:hidden;              /* 페이지가 스크롤되지 않게 */
+    background:var(--ink);
+    touch-action:none;            /* 브라우저 기본 확대/스크롤을 끔.
+                                     이걸 안 하면 우리가 만든 핀치 줌 대신
+                                     브라우저가 페이지를 확대해버립니다. */
+    -webkit-user-select:none; user-select:none;   /* 길게 눌러도 글자 선택 안 되게 */
+    -webkit-touch-callout:none;                   /* 길게 눌러도 iOS 팝업 안 뜨게 */
   }
   body { font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif; }
 
-  #cam { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:0; background:#000; }
-  a-scene { position:fixed !important; inset:0; z-index:1; touch-action:none; }
+  /* --- 맨 아래층: 카메라 영상 --- */
+  #cam {
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover;   /* 화면 비율이 안 맞아도 잘리더라도 꽉 채움 */
+    z-index:0;          /* 가장 뒤 */
+    background:#000;
+  }
+
+  /* --- 중간층: 3D 화면 --- */
+  a-scene {
+    position:fixed !important; inset:0;
+    z-index:1;          /* 카메라 영상 바로 위 */
+    touch-action:none;
+  }
   a-scene canvas { touch-action:none !important; }
+
+  /* A-Frame이 기본으로 넣어주는 VR 버튼과 화면회전 안내를 숨김 */
   .a-enter-vr, .a-enter-ar, .a-orientation-modal { display:none !important; }
 
+  /* --- 맨 위층: 시작 화면 --- */
   #intro {
     position:fixed; inset:0; z-index:30;
-    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    display:flex; flex-direction:column;      /* 세로로 쌓기 */
+    justify-content:center; align-items:center; /* 가운데 정렬 */
     gap:22px; padding:32px; text-align:center;
     background:radial-gradient(120% 90% at 50% 0%, #0d3a4a 0%, var(--ink) 70%);
     color:var(--foam);
   }
   #intro h1 { margin:0; font-size:30px; letter-spacing:-.02em; }
   #intro p { margin:0; font-size:15px; line-height:1.7; opacity:.8; max-width:320px; }
+
+  /* GUBIMETA 로고.
+     로고 잉크가 짙은 남색이라 어두운 배경에 그냥 올리면 안 보입니다.
+     그래서 흰색 카드를 깔고 그 위에 얹었습니다.
+     로고를 흰색 단색으로 바꾸고 싶다면 아래 img 규칙에
+     filter:brightness(0) invert(1); 을 추가하고 #brand의 배경을 없애면 됩니다. */
+  #brand {
+    background:#fff; padding:13px 22px; border-radius:14px;
+    line-height:0;                              /* 이미지 아래 여백 제거 */
+    box-shadow:0 8px 28px rgba(0,0,0,.32);
+    animation:rise .7s cubic-bezier(.2,.8,.3,1) both;
+  }
+  #brand img { display:block; width:150px; height:auto; }
+
+  /* 아래에서 살짝 떠오르는 등장 효과 */
+  @keyframes rise {
+    from { opacity:0; transform:translateY(10px); }
+    to   { opacity:1; transform:none; }
+  }
+  /* 움직임을 줄여달라고 설정한 사용자에게는 애니메이션을 끔 (접근성) */
+  @media (prefers-reduced-motion: reduce) { #brand { animation:none; } }
+
   #start {
-    border:0; border-radius:999px; padding:15px 38px;
+    border:0; border-radius:999px;   /* 999px = 완전한 알약 모양 */
+    padding:15px 38px;
     background:var(--tide); color:#04222b; font-size:16px; font-weight:700;
     font-family:inherit; cursor:pointer;
   }
+  /* 키보드로 이동했을 때만 테두리 표시 (마우스 클릭 때는 안 나옴) */
   #start:focus-visible { outline:3px solid var(--coral); outline-offset:3px; }
+
   #err { color:var(--coral); font-size:14px; display:none; }
 
+  /* --- 상단 안내 문구 (4.5초 후 사라짐) --- */
   #hint {
-    position:fixed; top:calc(16px + env(safe-area-inset-top)); left:50%;
-    transform:translateX(-50%); z-index:20; opacity:0; pointer-events:none;
+    position:fixed; left:50%; z-index:20;
+    top:calc(16px + env(safe-area-inset-top));  /* 아이폰 노치를 피해서 배치 */
+    transform:translateX(-50%);                  /* 가로 가운데 정렬 */
+    opacity:0;
+    pointer-events:none;    /* 이 요소가 터치를 가로채지 않게 함 */
     padding:10px 18px; border-radius:999px; font-size:13px; line-height:1.5;
     background:rgba(6,35,46,.66); color:var(--foam); text-align:center;
-    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);  /* 뒤 배경 흐리게 */
     transition:opacity .5s;
   }
-  #hint.on { opacity:1; }
+  #hint.on { opacity:1; }   /* 자바스크립트가 .on 클래스를 붙였다 뗍니다 */
 
+  /* --- 하단 조작 버튼들 --- */
   #hud {
     position:fixed; left:0; right:0; bottom:0; z-index:20;
-    display:none; justify-content:center; align-items:center; gap:8px;
+    display:none;   /* 처음엔 숨김. 카메라를 켠 뒤에 나타납니다. */
+    justify-content:center; align-items:center; gap:8px;
     padding:14px 10px calc(14px + env(safe-area-inset-bottom));
   }
   #hud.on { display:flex; }
@@ -61,21 +172,27 @@
     background:rgba(6,35,46,.62); color:var(--foam);
     backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
     font-size:20px; font-weight:600; font-family:inherit; cursor:pointer;
-    touch-action:manipulation; flex:none;
+    touch-action:manipulation;   /* 버튼은 탭 반응을 빠르게 */
+    flex:none;                   /* 화면이 좁아도 버튼이 찌그러지지 않게 */
   }
   .btn:active { background:var(--tide); color:#04222b; }
   .pill {
     min-width:64px; text-align:center; padding:11px 10px; border-radius:999px;
     background:rgba(6,35,46,.62); color:var(--foam); font-size:13px;
-    font-variant-numeric:tabular-nums; flex:none;
+    font-variant-numeric:tabular-nums;  /* 숫자 폭을 고정해 값이 바뀌어도 안 흔들림 */
+    flex:none;
     backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
   }
 </style>
 </head>
 <body>
 
+<!-- 카메라 영상이 들어갈 자리.
+     playsinline : 아이폰에서 전체화면으로 튀지 않고 그 자리에서 재생
+     muted       : 소리를 꺼야 자동재생이 허용됨 -->
 <video id="cam" autoplay playsinline muted></video>
 
+<!-- 시작 화면 -->
 <div id="intro">
   <div id="brand"><img src="logo2.png" alt="GUBIMETA" width="192" height="49"></div>
   <h1>물 속 세상으로 떠나요!</h1>
@@ -86,6 +203,7 @@
 
 <div id="hint">물고기를 끌어서 옮기고<br>두 손가락으로 크기를 바꿔보세요</div>
 
+<!-- 하단 조작 버튼. &#128031; 은 물고기 이모지입니다. -->
 <div id="hud">
   <button class="btn" id="minus" aria-label="작게">&minus;</button>
   <div class="pill" id="scaleLabel">100%</div>
@@ -96,166 +214,334 @@
 </div>
 
 <script>
-/* =========================================================
-   설정 — 여기만 만지면 됩니다
-   raw / center 는 GLB 파일을 직접 분석해서 나온 실측값입니다.
-   len 만 바꾸면 화면에 나오는 실제 길이가 바뀝니다.
-   ========================================================= */
+/* ============================================================================
+   1. 설정값 - 대부분의 경우 여기만 고치면 됩니다
+   ============================================================================
+
+   [ GLB 크기 문제 ]
+   3D 모델 파일(GLB)은 만든 프로그램마다 길이 단위가 다릅니다.
+   어떤 건 1이 1미터를 뜻하고, 어떤 건 1이 1밀리미터를 뜻합니다.
+   그래서 세 파일에 똑같이 scale="0.3"을 주면
+   어떤 물고기는 티끌만 하고 어떤 물고기는 방을 가득 채웁니다.
+
+   실제로 이 프로젝트의 Fish2는 Fish1보다 원본이 12배 컸습니다.
+
+   [ 해결 방법 ]
+   GLB 파일을 미리 분석해서 "원본에서 가장 긴 변의 길이"를 재 두고,
+   내가 원하는 실제 길이를 그 값으로 나눠 배율을 구합니다.
+
+       배율 = 원하는 길이(len) ÷ 원본 길이(raw)
+
+   이렇게 하면 원본 단위가 무엇이든 화면에는 항상 원하는 크기로 나옵니다.
+
+   [ 각 항목의 뜻 ]
+     src      : <a-assets> 안에 정의한 모델의 id
+     len      : 화면에 나올 실제 길이 (미터). ★ 이것만 바꾸면 됩니다 ★
+     raw      : GLB 원본에서 가장 긴 변의 길이 (측정값, 건드리지 마세요)
+     center   : GLB 원본의 중심점 좌표 (측정값, 건드리지 마세요)
+                모델 원점이 꼬리 끝에 있는 경우가 많아서, 이 값으로
+                몸 한가운데를 기준으로 삼아야 회전이 자연스럽습니다.
+     animated : GLB 안에 헤엄치는 애니메이션이 들어있는지 여부
+
+   다른 GLB로 교체할 때는 같은 저장소의 check-size.html 을 열면
+   그 모델의 raw 와 center 값을 알려줍니다.
+   ============================================================================ */
 var MODELS = [
+  //         화면에 나올 길이   원본 길이            원본 중심점                애니메이션
   { src:'#fish1', len:0.40, raw: 7.87713, center:[0,  0.31180, -0.81436], animated:true  },
   { src:'#fish2', len:0.30, raw:95.56850, center:[0,  0.00000,  0.00000], animated:false },
   { src:'#fish3', len:0.55, raw:10.19428, center:[0, -0.50150, -1.56104], animated:true  }
 ];
-var START_COUNT = 12;              // 처음 나오는 총 마릿수 (주소 뒤에 ?n=20 으로도 바꿀 수 있음)
-var MAX_COUNT   = 40;
-var SIZE_JITTER = 0.4;             // 같은 종류라도 ±40% 크기 차이
 
-/* =========================================================
-   place-model — 실측값으로 크기와 중심을 맞춤
-   ========================================================= */
-/* =========================================================
-   place-model — 실측값으로 크기와 중심을 맞춘다 (측정 없음)
-   ========================================================= */
+var START_COUNT = 12;   // 처음 나오는 총 마릿수 (주소 뒤에 ?n=20 을 붙여도 바뀝니다)
+var MAX_COUNT   = 40;   // 최대 마릿수. 너무 많으면 휴대폰이 느려집니다.
+var SIZE_JITTER = 0.4;  // 같은 종류라도 ±40% 크기 차이를 줘서 자연스럽게.
+                        // 0으로 하면 같은 종류는 모두 같은 크기가 됩니다.
+
+
+/* ============================================================================
+   2. A-Frame 컴포넌트 만들기
+
+   [ A-Frame의 구조: 엔티티-컴포넌트 ]
+   A-Frame에서 3D 물체는 <a-entity>라는 "빈 껍데기"입니다.
+   여기에 컴포넌트(부품)를 붙여서 성격을 부여합니다.
+
+       <a-entity gltf-model="#fish1" wander></a-entity>
+                 └ 모양을 담당       └ 움직임을 담당
+
+   레고 블록을 조립하듯, 필요한 기능을 컴포넌트로 만들어 붙이는 방식입니다.
+
+   [ 컴포넌트의 구성 ]
+     schema : 이 컴포넌트가 받을 수 있는 설정값 목록
+     init   : 붙는 순간 딱 한 번 실행
+     tick   : 매 프레임(초당 약 60번) 실행 - 여기서 움직임을 만듭니다
+
+   [ el 과 object3D 의 차이 ]
+     this.el          = HTML 요소 (A-Frame 세계)
+     this.el.object3D = 실제 3D 물체 (three.js 세계)
+
+   위치나 회전을 매 프레임 바꿀 때는 setAttribute 대신
+   object3D를 직접 만지는 게 훨씬 빠릅니다.
+   ============================================================================ */
+
+
+/* ---- 2-1. place-model : 모델의 크기와 중심을 맞춰주는 컴포넌트 ---- */
 AFRAME.registerComponent('place-model', {
   schema: {
-    len:    {default: 0.4},                       // 화면에 나올 길이 (m)
-    raw:    {default: 1},                         // GLB 원본의 가장 긴 변
-    center: {type: 'vec3', default: {x:0,y:0,z:0}} // GLB 원본의 중심점
+    len:    {default: 0.4},                          // 화면에 나올 길이 (m)
+    raw:    {default: 1},                            // GLB 원본의 가장 긴 변
+    center: {type: 'vec3', default: {x:0, y:0, z:0}}  // GLB 원본의 중심점
   },
+
   init: function () {
-    var self = this;
+    var self = this;   // 아래 함수 안에서도 this를 쓰기 위해 미리 저장
+
+    // 기준 배율을 계산해서 HTML의 data-base 속성에 적어 둡니다.
+    // 나중에 사용자가 핀치로 크기를 바꾸면 여기에 배율을 곱하게 됩니다.
     this.el.dataset.base = this.data.len / this.data.raw;
+
+    // 크기 조절 대상 목록에 등록
     if (modelEls.indexOf(this.el) === -1) modelEls.push(this.el);
     applyScale();
 
+    // 모델의 중심을 몸 한가운데로 옮기는 함수
     function center() {
-      var mesh = self.el.getObject3D('mesh');
-      if (!mesh) return;
-      // 원점이 꼬리 끝인 모델이 많아서 몸 한가운데로 옮겨 준다
+      var mesh = self.el.getObject3D('mesh');   // GLB에서 읽어온 실제 3D 데이터
+      if (!mesh) return;                         // 아직 안 읽혔으면 나중에 다시
+
+      // 중심점만큼 반대로 밀어주면 몸 한가운데가 원점에 옵니다.
+      // 이걸 안 하면 회전할 때 물고기가 제자리에서 돌지 않고
+      // 큰 원을 그리며 휘둘리듯 돕니다.
       var c = self.data.center;
       mesh.position.set(-c.x, -c.y, -c.z);
     }
+
+    // GLB는 인터넷에서 받아오므로 시간이 걸립니다.
+    // 다 읽히면 'model-loaded' 이벤트가 발생합니다.
     this.el.addEventListener('model-loaded', center);
+    // 혹시 이미 읽혀 있었다면 바로 실행 (타이밍 안전장치)
     if (this.el.getObject3D('mesh')) center();
   }
 });
 
-/* =========================================================
-   wander — 랜덤한 목적지를 정해 돌아다니는 유영
-   ========================================================= */
+
+/* ---- 2-2. wander : 랜덤한 목적지를 정해 돌아다니는 컴포넌트 ----
+
+   [ 움직임을 만드는 원리 ]
+   물고기가 원을 그리며 돌면 기계적으로 보입니다.
+   그래서 "목적지를 하나 정하고 → 그쪽으로 헤엄치고 → 도착하면
+   새 목적지를 정한다"는 방식을 씁니다. 이걸 wander(배회)라고 부릅니다.
+
+   방향을 갑자기 홱 바꾸면 어색하므로, 속도를 조금씩 목표 방향으로
+   섞어줍니다(lerp). 그러면 부드러운 곡선을 그리며 돌아갑니다.
+   ------------------------------------------------------------------------ */
 AFRAME.registerComponent('wander', {
   schema: {
-    speed:    {default: 0.5},
-    turn:     {default: 1.2},
-    rangeXZ:  {default: 3.5},
-    rangeY:   {default: 0.9},
-    minDist:  {default: 1.1},
-    sway:     {default: 0},     // 뼈대 없는 모델용 좌우 몸짓
-    yawOffset:{default: 0}      // 세 모델 모두 머리가 +Z라 0이 맞습니다
+    speed:    {default: 0.5},   // 헤엄치는 속도 (초당 미터)
+    turn:     {default: 1.2},   // 방향 전환의 민첩함. 클수록 빠르게 꺾음
+    rangeXZ:  {default: 3.5},   // 좌우·앞뒤로 돌아다니는 범위 (m)
+    rangeY:   {default: 0.9},   // 위아래로 돌아다니는 범위 (m)
+    minDist:  {default: 1.1},   // 내 몸에서 이 거리 안으로는 들어오지 않음
+    sway:     {default: 0},     // 몸 전체를 좌우로 흔드는 정도.
+                                // Fish2는 뼈대가 없어 꼬리를 못 흔들기 때문에
+                                // 이 값으로 살아있는 느낌을 냅니다.
+    yawOffset:{default: 0}      // 모델이 바라보는 방향 보정.
+                                // 이 세 모델은 머리가 +Z를 향하고 있어서 0.
+                                // 옆이나 뒤를 보고 헤엄치면 1.57(90도),
+                                // 3.14(180도), 4.71(270도)을 넣어보세요.
   },
+
   init: function () {
-    this.vel = new THREE.Vector3();
-    this.target = new THREE.Vector3();
-    this.tmp = new THREE.Vector3();
-    this.t = Math.random() * 10;
-    this.frozen = false;
+    // 매 프레임 새 객체를 만들면 메모리 낭비가 심하므로,
+    // 계산에 쓸 벡터들을 미리 만들어두고 재사용합니다. (중요한 최적화 습관)
+    this.vel    = new THREE.Vector3();   // 현재 속도(방향+빠르기)
+    this.target = new THREE.Vector3();   // 지금 향하는 목적지
+    this.tmp    = new THREE.Vector3();   // 계산용 임시 공간
+
+    this.t = Math.random() * 10;   // 흔들림 위상. 물고기마다 다르게 시작
+    this.frozen = false;           // 손가락으로 잡고 있는 중이면 true
+
     this.pickTarget();
-    this.el.object3D.position.copy(this.target);
+    this.el.object3D.position.copy(this.target);  // 시작 위치도 랜덤하게
     this.pickTarget();
   },
+
+  // 새 목적지를 랜덤하게 고릅니다
   pickTarget: function () {
     var d = this.data, p = this.target;
+
+    // 최대 16번까지 다시 뽑습니다.
+    // 내 몸(원점) 너무 가까이 찍히면 물고기가 얼굴로 돌진하기 때문에,
+    // minDist보다 먼 곳이 나올 때까지 다시 뽑습니다.
     for (var i = 0; i < 16; i++) {
       p.set(
-        (Math.random() * 2 - 1) * d.rangeXZ,
+        (Math.random() * 2 - 1) * d.rangeXZ,   // -rangeXZ ~ +rangeXZ 사이
         (Math.random() * 2 - 1) * d.rangeY,
         (Math.random() * 2 - 1) * d.rangeXZ
       );
+      // Math.hypot(x, z) = 원점에서의 수평 거리
       if (Math.hypot(p.x, p.z) >= d.minDist) break;
     }
+
+    // 벽에 낀 것처럼 오래 못 가는 경우를 대비해 제한시간을 둡니다
     this.timer = 3 + Math.random() * 6;
   },
+
+  // 매 프레임 호출됩니다. delta는 지난 프레임에서 흐른 시간(밀리초).
   tick: function (time, delta) {
-    if (this.frozen || !delta) return;
+    if (this.frozen || !delta) return;   // 붙잡혀 있으면 스스로 움직이지 않음
+
+    // delta를 초 단위로 바꾸고 최대 0.05초로 제한합니다.
+    // 앱을 잠깐 나갔다 오면 delta가 몇 초씩 되는데,
+    // 그대로 쓰면 물고기가 순간이동해버립니다.
     var dt = Math.min(delta / 1000, 0.05);
+
     var d = this.data, o = this.el.object3D;
     this.t += dt;
     this.timer -= dt;
 
+    // 목적지까지의 방향 = 목적지 - 현재위치
     this.tmp.subVectors(this.target, o.position);
+
+    // 거의 도착했거나 시간이 다 됐으면 새 목적지
     if (this.tmp.length() < 0.4 || this.timer < 0) {
       this.pickTarget();
       this.tmp.subVectors(this.target, o.position);
     }
+
+    // 방향만 남기고(normalize) 원하는 속도를 곱함 = 목표 속도
     this.tmp.normalize().multiplyScalar(d.speed);
+
+    // lerp = 선형 보간. 현재 속도를 목표 속도 쪽으로 조금씩 섞습니다.
+    // 이 한 줄 덕분에 방향 전환이 부드러운 곡선이 됩니다.
     this.vel.lerp(this.tmp, Math.min(1, d.turn * dt));
+
+    // 위치 = 위치 + 속도 × 시간
     o.position.addScaledVector(this.vel, dt);
 
+    // ---- 몸의 방향 정하기 ----
     var sp = this.vel.length();
-    var yaw = Math.atan2(this.vel.x, this.vel.z) + d.yawOffset
-              + Math.sin(this.t * 4.5) * d.sway;
-    var pitch = sp > 0.001 ? -Math.asin(Math.max(-1, Math.min(1, this.vel.y / sp))) * 0.6 : 0;
-    o.rotation.set(pitch, yaw, Math.sin(this.t * 5) * 0.12);
+
+    // yaw(좌우 회전) : 진행 방향을 바라보게 합니다.
+    // atan2(x, z)를 쓰면 모델의 +Z축이 진행 방향을 향합니다.
+    var yaw = Math.atan2(this.vel.x, this.vel.z)
+              + d.yawOffset
+              + Math.sin(this.t * 4.5) * d.sway;   // 좌우 몸짓
+
+    // pitch(위아래 기울기) : 올라갈 땐 고개를 들고, 내려갈 땐 숙임.
+    // 0.6을 곱해 과하지 않게 줄였습니다.
+    var pitch = sp > 0.001
+      ? -Math.asin(Math.max(-1, Math.min(1, this.vel.y / sp))) * 0.6
+      : 0;
+
+    // roll(좌우로 갸웃) : 물속에서 몸이 살짝 기우는 느낌
+    var roll = Math.sin(this.t * 5) * 0.12;
+
+    o.rotation.set(pitch, yaw, roll);
   },
-  freeze: function () { this.frozen = true; this.vel.set(0, 0, 0); },
+
+  // 아래 두 함수는 손가락으로 잡고 놓을 때 밖에서 호출합니다
+  freeze:  function () { this.frozen = true; this.vel.set(0, 0, 0); },
   release: function () { this.pickTarget(); this.frozen = false; }
 });
 
-/* ===== 상태 ===== */
-var camEl, school, fishEls = [], modelEls = [];
-var scale = 1, MIN = 0.05, MAX = 8;
-var raycaster, v2, tmpV;
-var spawnIndex = 0;
 
+/* ============================================================================
+   3. 전역 변수
+   ============================================================================ */
+var camEl;              // 3D 카메라 엔티티
+var school;             // 물고기들을 담는 부모 엔티티
+var fishEls  = [];      // 물고기 엔티티 목록
+var modelEls = [];      // 크기 조절 대상(모델) 목록
+
+var scale = 1;          // 사용자가 조절한 크기 배율 (1 = 100%)
+var MIN = 0.05, MAX = 8;
+
+var raycaster, v2, tmpV;   // 화면 터치 지점을 3D 공간으로 쏘는 데 쓰는 도구
+var spawnIndex = 0;        // 물고기 종류를 번갈아 배정하기 위한 카운터
+
+// a부터 b 사이의 랜덤한 실수
 function rand(a, b) { return a + Math.random() * (b - a); }
 
-/* ===== 물고기 한 마리 생성 ===== */
+
+/* ============================================================================
+   4. 물고기 만들고 지우기
+   ============================================================================ */
+
+/* 물고기 한 마리를 만들어 화면에 추가합니다.
+   HTML에 미리 적어두지 않고 자바스크립트로 만드는 이유는,
+   마릿수를 자유롭게 바꾸고 각 마리마다 다른 성격을 주기 위해서입니다.
+
+   만들어지는 구조:
+
+     <a-entity class="fish" wander="...">    ← 위치와 움직임 담당
+       <a-entity class="model" gltf-model>   ← 눈에 보이는 모양
+       <a-sphere>                            ← 손가락으로 잡기 위한 투명 판정구
+     </a-entity>
+
+   모양과 판정구를 따로 둔 이유:
+   물고기가 작아지면 정확히 찍기 어려우므로,
+   반지름 35cm짜리 보이지 않는 공을 씌워 대충 눌러도 잡히게 했습니다.        */
 function addFish() {
   if (!school || fishEls.length >= MAX_COUNT) return;
 
-  // 종류를 순서대로 돌려가며 배정 → 세 종류가 고르게 섞입니다
+  // 종류를 0,1,2,0,1,2... 순서로 돌아가며 배정합니다.
+  // 완전 랜덤으로 하면 운 나쁘게 한 종류만 잔뜩 나올 수 있습니다.
   var m = MODELS[spawnIndex % MODELS.length];
   spawnIndex++;
 
+  // (1) 움직임을 담당할 부모 엔티티
   var fish = document.createElement('a-entity');
   fish.setAttribute('class', 'fish');
   fish.setAttribute('wander', {
+    // 마리마다 성격을 다르게 → 훨씬 자연스러워 보입니다
     speed:   rand(0.25, 0.75),
     turn:    rand(0.8, 2.0),
     rangeXZ: rand(2.5, 5.0),
     rangeY:  rand(0.6, 1.4),
     minDist: rand(0.9, 1.5),
-    // Fish2는 뼈대가 없어 꼬리를 못 흔들므로 몸 전체를 살짝 흔들어 준다
+    // 애니메이션이 없는 모델(Fish2)만 몸을 흔들어 줍니다
     sway:    m.animated ? 0 : 0.18
   });
 
+  // (2) 눈에 보이는 모양
   var model = document.createElement('a-entity');
   model.setAttribute('class', 'model');
   model.setAttribute('gltf-model', m.src);
+  // 애니메이션이 있는 모델에만 재생기를 붙입니다 (없으면 낭비)
   if (m.animated) model.setAttribute('animation-mixer', '');
   model.setAttribute('place-model', {
-    len:    m.len * rand(1 - SIZE_JITTER, 1 + SIZE_JITTER),
+    len:    m.len * rand(1 - SIZE_JITTER, 1 + SIZE_JITTER),   // 크기에 편차
     raw:    m.raw,
     center: { x: m.center[0], y: m.center[1], z: m.center[2] }
   });
 
+  // (3) 손가락으로 잡기 위한 투명한 공.
+  //     opacity:0 이라 안 보이지만 레이캐스팅에는 걸립니다.
+  //     depthWrite:false 를 줘야 뒤에 있는 물체를 가리지 않습니다.
   var grab = document.createElement('a-sphere');
   grab.setAttribute('radius', 0.35);
   grab.setAttribute('material', 'opacity: 0; transparent: true; depthWrite: false');
 
   fish.appendChild(model);
   fish.appendChild(grab);
-  school.appendChild(fish);
+  school.appendChild(fish);   // 이 순간 화면에 등장합니다
   fishEls.push(fish);
   updateCount();
 }
 
+/* 가장 최근에 만든 물고기를 지웁니다 */
 function removeFish() {
   var fish = fishEls.pop();
   if (!fish) return;
-  if (grabbed === fish) grabbed = null;
+
+  if (grabbed === fish) grabbed = null;   // 잡고 있던 물고기면 손을 놓음
+
+  // 크기 조절 목록에서도 빼줍니다. 안 그러면 지워진 물고기를 계속 참조해
+  // 메모리가 새고 오류가 납니다.
   var idx = modelEls.indexOf(fish.querySelector('.model'));
   if (idx > -1) modelEls.splice(idx, 1);
+
   fish.parentNode.removeChild(fish);
   updateCount();
 }
@@ -265,165 +551,289 @@ function updateCount() {
   if (el) el.textContent = fishEls.length;
 }
 
+
+/* ============================================================================
+   5. 크기 조절
+
+   각 모델의 기준 배율(data-base)에 사용자 배율(scale)을 곱합니다.
+   기준 배율은 place-model이 계산해 둔 값입니다.
+
+       최종 크기 = 기준 배율 × 사용자 배율
+
+   물고기 위치가 아니라 모양에만 배율을 적용하기 때문에,
+   크기를 키워도 헤엄치는 범위는 그대로입니다.
+   ============================================================================ */
 function applyScale() {
+  // 너무 작아지거나 커지지 않게 범위를 제한
   scale = Math.min(MAX, Math.max(MIN, scale));
+
   for (var i = 0; i < modelEls.length; i++) {
     var el = modelEls[i];
     var b = parseFloat(el.dataset.base) || 1;
     el.object3D.scale.set(b * scale, b * scale, b * scale);
   }
+
   var label = document.getElementById('scaleLabel');
   if (label) label.textContent = Math.round(scale * 100) + '%';
 }
 
+
+/* ============================================================================
+   6. 화면의 어느 물고기를 눌렀는지 알아내기 (레이캐스팅)
+
+   [ 원리 ]
+   화면은 2D인데 물고기는 3D 공간에 있습니다.
+   그래서 손가락이 닿은 지점에서 화면 안쪽으로 보이지 않는 광선을 쏘고,
+   그 광선에 맞은 물체를 찾습니다. 이걸 레이캐스팅이라고 합니다.
+
+   [ 좌표 변환 ]
+   three.js는 화면 좌표를 -1 ~ +1 범위로 바꿔서 받습니다.
+   화면 왼쪽 끝이 -1, 오른쪽 끝이 +1이고,
+   Y축은 위가 +1이라 웹 좌표와 방향이 반대여서 부호를 뒤집습니다.
+   ============================================================================ */
 function pickFish(x, y) {
   var cam = camEl && camEl.getObject3D('camera');
   if (!cam) return null;
-  v2.set((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
+
+  v2.set(
+     (x / window.innerWidth)  * 2 - 1,
+    -(y / window.innerHeight) * 2 + 1    // Y축 뒤집기
+  );
   raycaster.setFromCamera(v2, cam);
+
+  // 모든 물고기를 검사 대상으로 넣습니다. true = 자식까지 전부 검사
   var objs = [];
   for (var i = 0; i < fishEls.length; i++) objs.push(fishEls[i].object3D);
   var hits = raycaster.intersectObjects(objs, true);
-  if (!hits.length) return null;
+
+  if (!hits.length) return null;   // 아무것도 안 맞았으면 빈 곳을 누른 것
+
+  // 맞은 것은 물고기의 자식(메시나 판정구)이므로,
+  // 부모를 거슬러 올라가 어느 물고기인지 찾습니다.
   var o = hits[0].object;
   while (o) {
-    for (var j = 0; j < fishEls.length; j++) if (fishEls[j].object3D === o) return fishEls[j];
+    for (var j = 0; j < fishEls.length; j++) {
+      if (fishEls[j].object3D === o) return fishEls[j];
+    }
     o = o.parent;
   }
   return null;
 }
 
-/* ===== 터치 · 마우스 ===== */
-var pointers = new Map();
-var grabbed = null, grabDist = 2.5;
+
+/* ============================================================================
+   7. 터치와 마우스 조작
+
+   [ Pointer Events 를 쓰는 이유 ]
+   예전에는 마우스용(mousedown)과 터치용(touchstart) 코드를 따로 짜야 했습니다.
+   Pointer Events는 마우스, 손가락, 펜을 모두 같은 방식으로 다뤄줍니다.
+   손가락마다 고유한 pointerId가 붙어서, 몇 개가 닿았는지 셀 수 있습니다.
+
+   [ 조작 규칙 ]
+     손가락 1개로 물고기를 누르고 끌기 → 그 물고기를 옮김
+     손가락 1개로 빈 곳을 좌우로 쓸기  → 물고기 무리 전체를 회전
+     손가락 2개를 벌리거나 좁히기      → 크기 조절
+   ============================================================================ */
+
+var pointers = new Map();     // 현재 화면에 닿아 있는 손가락들
+var grabbed = null;           // 지금 잡고 있는 물고기
+var grabDist = 2.5;           // 잡은 순간 카메라와의 거리
 var lastX = 0, rotating = false;
 var pinchStart = 0, pinchScale = 1;
 
+// 두 손가락 사이의 거리
 function pinchDistance() {
   var p = Array.from(pointers.values());
   return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
 }
+
+// 잡고 있던 물고기를 놓아줍니다
 function releaseGrab() {
   if (!grabbed) return;
   if (grabbed.components.wander) grabbed.components.wander.release();
   grabbed = null;
 }
 
+/* 손가락이 화면에 닿았을 때 */
 function onDown(e) {
+  // 버튼이나 시작화면을 눌렀으면 여기서 처리하지 않습니다
   if (e.target.closest('#hud') || e.target.closest('#intro')) return;
+
   pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
 
+  // 두 번째 손가락이 닿았다 → 크기 조절 모드 시작
   if (pointers.size === 2) {
     releaseGrab();
     rotating = false;
-    pinchStart = pinchDistance();
-    pinchScale = scale;
+    pinchStart = pinchDistance();   // 시작 거리를 기억
+    pinchScale = scale;             // 시작 배율을 기억
     return;
   }
   if (pointers.size !== 1) return;
 
+  // 첫 손가락 → 물고기를 눌렀는지 확인
   var fish = pickFish(e.clientX, e.clientY);
+
   if (fish) {
+    // 물고기를 잡았다
     grabbed = fish;
-    fish.components.wander.freeze();
+    fish.components.wander.freeze();   // 스스로 헤엄치는 걸 멈춤
+
+    // 카메라와 물고기 사이의 거리를 기억합니다.
+    // 이 거리를 유지한 채로 끌어야 손가락을 따라 자연스럽게 움직입니다.
     var camPos = new THREE.Vector3(), fishPos = new THREE.Vector3();
     camEl.object3D.getWorldPosition(camPos);
     fish.object3D.getWorldPosition(fishPos);
     grabDist = camPos.distanceTo(fishPos);
   } else {
+    // 빈 곳을 눌렀다 → 무리 전체 회전 모드
     rotating = true;
     lastX = e.clientX;
   }
 }
 
+/* 손가락이 움직일 때 */
 function onMove(e) {
   if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
 
+  // (A) 두 손가락 → 크기 조절
   if (pointers.size >= 2 && pinchStart > 0) {
+    // 지금 거리가 처음의 2배면 크기도 2배
     scale = pinchScale * (pinchDistance() / pinchStart);
     applyScale();
     return;
   }
+
+  // (B) 물고기를 잡고 있음 → 손가락 위치로 옮기기
   if (grabbed) {
     var cam = camEl.getObject3D('camera');
-    v2.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    v2.set(
+       (e.clientX / window.innerWidth)  * 2 - 1,
+      -(e.clientY / window.innerHeight) * 2 + 1
+    );
     raycaster.setFromCamera(v2, cam);
+
+    // 광선의 시작점에서 방향으로 grabDist 만큼 간 지점 = 새 위치
     tmpV.copy(raycaster.ray.direction).multiplyScalar(grabDist).add(raycaster.ray.origin);
+
+    // 위에서 구한 건 월드 좌표입니다.
+    // 물고기의 position은 부모(school) 기준이므로 좌표계를 변환해야 합니다.
     school.object3D.worldToLocal(tmpV);
+
     grabbed.object3D.position.copy(tmpV);
     return;
   }
+
+  // (C) 빈 곳을 쓸고 있음 → 무리 전체를 좌우로 회전
   if (rotating) {
     school.object3D.rotation.y += (e.clientX - lastX) * 0.005;
     lastX = e.clientX;
   }
 }
 
+/* 손가락을 뗐을 때 */
 function onUp(e) {
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinchStart = 0;
   if (pointers.size === 0) { releaseGrab(); rotating = false; }
 }
 
-/* ===== 카메라 · 자이로 ===== */
+
+/* ============================================================================
+   8. 카메라와 자이로센서 권한
+
+   [ 왜 버튼을 눌러야 시작되는가 ]
+   브라우저는 보안상 카메라를 마음대로 켜지 못하게 막아 두었습니다.
+   반드시 사용자가 직접 버튼을 누르는 등의 행동 뒤에 요청해야 허용됩니다.
+   그래서 페이지를 열자마자 켜지 않고 "카메라 켜기" 버튼을 둔 것입니다.
+   ============================================================================ */
+
 async function startCamera() {
   var stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' } }, audio: false
+    // facingMode: 'environment' = 뒷면 카메라.
+    // ideal 로 적으면 뒷면이 없는 기기에서는 앞면이라도 켜집니다.
+    video: { facingMode: { ideal: 'environment' } },
+    audio: false
   });
   document.getElementById('cam').srcObject = stream;
 }
+
 async function askGyro() {
   var DOE = window.DeviceOrientationEvent;
+  // iOS 13부터는 자이로센서도 따로 권한을 물어야 합니다.
+  // 안드로이드에는 이 함수가 없으므로 있는지 먼저 확인합니다.
   if (DOE && typeof DOE.requestPermission === 'function') {
-    try { await DOE.requestPermission(); } catch (err) {}
+    try {
+      await DOE.requestPermission();
+    } catch (err) {
+      // 거부해도 화면은 동작합니다. 시선이 안 따라올 뿐입니다.
+    }
   }
 }
 
-/* ===== 시작 ===== */
+
+/* ============================================================================
+   9. 시작 - 페이지가 준비되면 실행
+   ============================================================================ */
 window.addEventListener('DOMContentLoaded', function () {
+
+  // 레이캐스팅에 쓸 도구들을 한 번만 만들어 재사용합니다
   raycaster = new THREE.Raycaster();
-  v2 = new THREE.Vector2();
+  v2   = new THREE.Vector2();
   tmpV = new THREE.Vector3();
 
   camEl  = document.getElementById('cam3d');
   school = document.getElementById('school');
 
-  // 주소에 ?n=20 이 붙어 있으면 그 마릿수로 시작
+  // 주소가 ...?n=20 이면 20마리로 시작합니다.
+  // 파일을 고치지 않고 여러 밀도를 시험해볼 때 편합니다.
   var q = parseInt(new URLSearchParams(location.search).get('n'), 10);
   var count = (q > 0 && q <= MAX_COUNT) ? q : START_COUNT;
 
+  // 3D 화면이 준비된 뒤에 물고기를 만들어야 합니다
   var sceneEl = document.querySelector('a-scene');
   function spawnAll() { for (var i = 0; i < count; i++) addFish(); }
   if (sceneEl.hasLoaded) spawnAll();
   else sceneEl.addEventListener('loaded', spawnAll);
 
+  // 하단 버튼들 연결
   document.getElementById('plus').onclick  = function () { scale *= 1.25; applyScale(); };
   document.getElementById('minus').onclick = function () { scale /= 1.25; applyScale(); };
   document.getElementById('more').onclick  = function () { addFish(); };
   document.getElementById('fewer').onclick = function () { removeFish(); };
 
-  document.addEventListener('pointerdown', onDown);
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
-  document.addEventListener('pointercancel', onUp);
+  // 터치·마우스 이벤트 연결
+  document.addEventListener('pointerdown',   onDown);
+  document.addEventListener('pointermove',   onMove);
+  document.addEventListener('pointerup',     onUp);
+  document.addEventListener('pointercancel', onUp);   // 전화가 와서 중단되는 경우 등
 
+  // iOS 사파리는 두 손가락 제스처를 페이지 확대로 먼저 가져가버립니다.
+  // 이 이벤트들을 막아야 우리가 만든 핀치 줌이 동작합니다.
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (t) {
     document.addEventListener(t, function (e) { e.preventDefault(); }, {passive: false});
   });
+  // 두 번 탭했을 때 확대되는 것도 막습니다
   document.addEventListener('dblclick', function (e) { e.preventDefault(); }, {passive: false});
 
+  // 시작 버튼
   document.getElementById('start').onclick = async function () {
     var err = document.getElementById('err');
     try {
-      await askGyro();
-      await startCamera();
+      await askGyro();      // 자이로 권한 먼저
+      await startCamera();  // 그다음 카메라
+
       document.getElementById('intro').style.display = 'none';
       document.getElementById('hud').classList.add('on');
+
+      // 안내 문구를 4.5초 보여주고 사라지게
       var hint = document.getElementById('hint');
       hint.classList.add('on');
       setTimeout(function () { hint.classList.remove('on'); }, 4500);
+
     } catch (e2) {
+      // 카메라 실패는 대부분 https가 아니거나 권한을 거부한 경우입니다
       err.style.display = 'block';
       err.textContent = '카메라를 열지 못했습니다. 주소가 https로 시작하는지, 브라우저에서 카메라가 차단되지 않았는지 확인해 주세요.';
     }
@@ -431,6 +841,23 @@ window.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+
+<!-- ==========================================================================
+     10. 3D 화면
+
+     [ a-scene 속성 풀이 ]
+       embedded                       : 전체화면이 아니라 페이지 안에 넣기
+       vr-mode-ui="enabled: false"    : VR 버튼 숨기기
+       device-orientation-permission-ui : A-Frame 기본 권한창 끄기
+                                        (우리가 직접 물어볼 것이므로)
+       renderer alpha: true           : 배경을 투명하게. ★ 이게 핵심입니다 ★
+       background transparent: true   : 배경색을 칠하지 않음
+                                        → 아래 카메라 영상이 비쳐 보임
+
+     [ 좌표계 ]
+       X = 오른쪽,  Y = 위,  Z = 나에게 다가오는 방향
+       단위는 미터입니다. 카메라를 y=1.6에 둔 것은 사람 눈높이를 뜻합니다.
+     ========================================================================== -->
 <a-scene
   embedded
   vr-mode-ui="enabled: false"
@@ -438,18 +865,32 @@ window.addEventListener('DOMContentLoaded', function () {
   renderer="colorManagement: true; antialias: true; alpha: true"
   background="transparent: true">
 
+  <!-- 3D 모델을 미리 받아두는 곳.
+       여기에 등록해두면 여러 물고기가 같은 파일을 공유해서
+       파일을 한 번만 내려받습니다. -->
   <a-assets>
     <a-asset-item id="fish1" src="Fish1.glb"></a-asset-item>
     <a-asset-item id="fish2" src="Fish2.glb"></a-asset-item>
     <a-asset-item id="fish3" src="Fish3.glb"></a-asset-item>
   </a-assets>
 
+  <!-- 3D 카메라 = 사용자의 눈.
+       look-controls 옵션 풀이
+         touchEnabled: false          손가락으로 시점을 못 돌리게 함.
+                                      (우리가 물고기를 끌 때 써야 하므로)
+         mouseEnabled: false          마우스로도 못 돌리게 함
+         magicWindowTrackingEnabled   자이로센서로 시점 회전 ← 이게 핵심 -->
   <a-entity id="cam3d" camera position="0 1.6 0"
             look-controls="touchEnabled: false; mouseEnabled: false; magicWindowTrackingEnabled: true"></a-entity>
 
-  <!-- 물고기는 자바스크립트가 여기에 채워 넣습니다 -->
+  <!-- 물고기들의 부모.
+       이 엔티티를 회전시키면 물고기 전체가 함께 돕니다.
+       내용물은 자바스크립트의 addFish()가 채워 넣습니다. -->
   <a-entity id="school" position="0 1.6 0"></a-entity>
 
+  <!-- 조명. 3D 물체는 빛이 없으면 새까맣게 보입니다.
+       ambient     = 사방에서 고르게 비추는 빛 (그림자 없음)
+       directional = 태양처럼 한 방향에서 오는 빛 (입체감을 만듦) -->
   <a-light type="ambient" color="#cfeff5" intensity="0.9"></a-light>
   <a-light type="directional" position="1 3 2" intensity="0.7"></a-light>
 </a-scene>
