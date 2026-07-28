@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLB 크기 진단</title>
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<style>
+  :root { --ink:#06232e; --foam:#eaf6f8; --tide:#1fb6c9; --coral:#ff7a59; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ink); color:var(--foam);
+         font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif; }
+  header { padding:24px 20px 10px; }
+  h1 { margin:0 0 6px; font-size:22px; }
+  header p { margin:0; font-size:14px; opacity:.7; line-height:1.6; }
+  #report { padding:16px 20px 24px; }
+  .card {
+    background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1);
+    border-radius:14px; padding:16px 18px; margin-bottom:12px;
+  }
+  .card h2 { margin:0 0 10px; font-size:16px; color:var(--tide); }
+  .row { display:flex; justify-content:space-between; gap:12px;
+         font-size:14px; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+  .row:last-child { border-bottom:0; }
+  .row span:last-child { font-variant-numeric:tabular-nums; text-align:right; }
+  .hi { color:var(--coral); font-weight:700; }
+  .verdict { margin-top:10px; font-size:13px; line-height:1.6; opacity:.85; }
+  code { background:rgba(0,0,0,.35); padding:2px 7px; border-radius:5px;
+         font-size:13px; color:var(--tide); }
+  #view { height:46vh; min-height:280px; background:#0a2e3b; }
+  #legend { padding:0 20px 28px; font-size:13px; opacity:.7; line-height:1.7; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GLB 크기 진단</h1>
+  <p>Fish1·2·3의 원본 크기를 재서 보여줍니다. 카메라 권한이 필요 없고 PC에서 열어도 됩니다.</p>
+</header>
+
+<div id="report">읽는 중…</div>
+
+<a-scene id="view" embedded vr-mode-ui="enabled: false"
+         renderer="colorManagement: true; antialias: true"
+         background="color: #0a2e3b">
+  <a-assets>
+    <a-asset-item id="fish1" src="Fish1.glb"></a-asset-item>
+    <a-asset-item id="fish2" src="Fish2.glb"></a-asset-item>
+    <a-asset-item id="fish3" src="Fish3.glb"></a-asset-item>
+  </a-assets>
+
+  <!-- 40cm로 정규화한 세 모델을 나란히 -->
+  <a-entity id="slot1" position="-0.7 0 0"><a-entity class="probe" data-name="Fish1" gltf-model="#fish1"></a-entity></a-entity>
+  <a-entity id="slot2" position=" 0   0 0"><a-entity class="probe" data-name="Fish2" gltf-model="#fish2"></a-entity></a-entity>
+  <a-entity id="slot3" position=" 0.7 0 0"><a-entity class="probe" data-name="Fish3" gltf-model="#fish3"></a-entity></a-entity>
+
+  <!-- 정확히 40cm짜리 기준 상자 -->
+  <a-box position="-0.7 -0.4 0" width="0.4" height="0.02" depth="0.02" color="#ff7a59"></a-box>
+  <a-box position=" 0   -0.4 0" width="0.4" height="0.02" depth="0.02" color="#ff7a59"></a-box>
+  <a-box position=" 0.7 -0.4 0" width="0.4" height="0.02" depth="0.02" color="#ff7a59"></a-box>
+
+  <a-entity camera position="0 0 1.7" look-controls="magicWindowTrackingEnabled: false"></a-entity>
+  <a-light type="ambient" color="#cfeff5" intensity="1"></a-light>
+  <a-light type="directional" position="1 3 2" intensity="0.8"></a-light>
+</a-scene>
+
+<div id="legend">
+  주황색 막대가 정확히 40cm입니다. 세 물고기 길이가 이 막대와 비슷하면 정규화가 제대로 된 것입니다.<br>
+  마우스를 끌면 시점을 돌릴 수 있습니다.
+</div>
+
+<script>
+/* 부모·자신의 스케일과 무관하게, 모델 자체 단위로 크기를 잰다 */
+function measureLocal(object3D) {
+  var box = new THREE.Box3();
+  var tmp = new THREE.Box3();
+  var m = new THREE.Matrix4();
+  var inv = new THREE.Matrix4();
+  object3D.updateMatrixWorld(true);
+  inv.copy(object3D.matrixWorld).invert();
+  object3D.traverse(function (node) {
+    if (node.isMesh && node.geometry) {
+      if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+      tmp.copy(node.geometry.boundingBox);
+      m.multiplyMatrices(inv, node.matrixWorld);
+      tmp.applyMatrix4(m);
+      box.union(tmp);
+    }
+  });
+  return box;
+}
+
+function fmt(n) {
+  if (n === 0) return '0';
+  if (n < 0.001) return n.toExponential(2);
+  if (n < 1) return n.toFixed(4);
+  if (n < 1000) return n.toFixed(2);
+  return Math.round(n).toLocaleString();
+}
+
+function guessUnit(max) {
+  if (max > 300)  return '밀리미터(mm)로 제작된 것 같습니다 — 1000배 큼';
+  if (max > 30)   return '센티미터(cm)로 제작된 것 같습니다 — 100배 큼';
+  if (max > 3)    return '미터 기준이지만 모델이 좀 큽니다';
+  if (max > 0.05) return '미터(m) 기준입니다 — 정상 범위';
+  return '단위가 너무 작습니다 — 그대로 쓰면 점처럼 보입니다';
+}
+
+var TARGET = 0.4;   // 목표 길이 40cm
+var done = 0;
+var results = [];
+
+document.querySelectorAll('.probe').forEach(function (el) {
+  el.addEventListener('model-loaded', function () {
+    var mesh = el.getObject3D('mesh');
+    var box = measureLocal(mesh);
+    var s = new THREE.Vector3();
+    box.getSize(s);
+    var max = Math.max(s.x, s.y, s.z);
+    var base = max > 0 ? TARGET / max : 1;
+
+    results.push({ name: el.dataset.name, x: s.x, y: s.y, z: s.z, max: max, base: base });
+
+    // 40cm로 맞춰 화면에 배치
+    el.object3D.scale.set(base, base, base);
+    var c = box.getCenter(new THREE.Vector3()).multiplyScalar(base);
+    el.object3D.position.set(-c.x, -c.y, -c.z);
+
+    if (++done === 3) render();
+  });
+
+  el.addEventListener('model-error', function () {
+    results.push({ name: el.dataset.name, error: true });
+    if (++done === 3) render();
+  });
+});
+
+function render() {
+  results.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  var html = '';
+  results.forEach(function (r) {
+    if (r.error) {
+      html += '<div class="card"><h2>' + r.name + '</h2>' +
+              '<div class="verdict hi">파일을 읽지 못했습니다. 파일명 대소문자를 확인하세요.</div></div>';
+      return;
+    }
+    html += '<div class="card">' +
+      '<h2>' + r.name + '</h2>' +
+      '<div class="row"><span>원본 가로 (X)</span><span>' + fmt(r.x) + '</span></div>' +
+      '<div class="row"><span>원본 세로 (Y)</span><span>' + fmt(r.y) + '</span></div>' +
+      '<div class="row"><span>원본 깊이 (Z)</span><span>' + fmt(r.z) + '</span></div>' +
+      '<div class="row"><span>가장 긴 변</span><span class="hi">' + fmt(r.max) + '</span></div>' +
+      '<div class="row"><span>40cm로 맞추는 배율</span><span class="hi">' + r.base.toPrecision(4) + '</span></div>' +
+      '<div class="verdict">' + guessUnit(r.max) + '<br>' +
+      '수동으로 넣으려면 <code>scale="' + r.base.toPrecision(3) + ' ' +
+      r.base.toPrecision(3) + ' ' + r.base.toPrecision(3) + '"</code></div>' +
+      '</div>';
+  });
+  document.getElementById('report').innerHTML = html;
+}
+
+setTimeout(function () {
+  if (done === 0) {
+    document.getElementById('report').innerHTML =
+      '<div class="card"><div class="verdict hi">모델을 하나도 읽지 못했습니다. ' +
+      'Fish1.glb / Fish2.glb / Fish3.glb 가 이 파일과 같은 폴더에 있는지, ' +
+      '파일명 대소문자가 정확한지 확인해 주세요.</div></div>';
+  }
+}, 12000);
+</script>
+
+</body>
+</html>
