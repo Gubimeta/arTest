@@ -3,90 +3,74 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Fish AR</title>
+<title>Fish AR — 마커 없음</title>
 
-<!-- A-Frame -->
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-<!-- AR.js (마커 트래킹) -->
-<script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.5/aframe/build/aframe-ar.js"></script>
-<!-- animation-mixer (GLB 내장 애니메이션 재생용) -->
 <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
 
 <style>
-  :root {
-    --ink: #06232e;
-    --foam: #eaf6f8;
-    --tide: #1fb6c9;
-    --coral: #ff7a59;
-  }
+  :root { --ink:#06232e; --foam:#eaf6f8; --tide:#1fb6c9; --coral:#ff7a59; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ink); }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif; }
+  html, body { margin:0; height:100%; overflow:hidden; background:var(--ink); }
+  body { font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif; }
 
-  /* 시작 화면 */
+  /* 카메라 영상 = 맨 뒤 배경 */
+  #cam {
+    position:fixed; inset:0; width:100%; height:100%;
+    object-fit:cover; z-index:0; background:#000;
+  }
+  /* 3D 씬 = 그 위에 투명하게 겹침 */
+  a-scene { position:fixed !important; inset:0; z-index:1; }
+  .a-enter-vr, .a-enter-ar, .a-orientation-modal { display:none !important; }
+
   #intro {
-    position: fixed; inset: 0; z-index: 30;
-    display: flex; flex-direction: column; justify-content: center; align-items: center;
-    gap: 22px; padding: 32px; text-align: center;
-    background: radial-gradient(120% 90% at 50% 0%, #0d3a4a 0%, var(--ink) 70%);
-    color: var(--foam);
+    position:fixed; inset:0; z-index:30;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    gap:22px; padding:32px; text-align:center;
+    background:radial-gradient(120% 90% at 50% 0%, #0d3a4a 0%, var(--ink) 70%);
+    color:var(--foam);
   }
-  #intro h1 { margin: 0; font-size: 30px; letter-spacing: -0.02em; font-weight: 700; }
-  #intro p { margin: 0; font-size: 15px; line-height: 1.7; opacity: .8; max-width: 340px; }
-  #intro img { width: 128px; border-radius: 10px; background: #fff; padding: 8px; }
+  #intro h1 { margin:0; font-size:30px; letter-spacing:-.02em; }
+  #intro p { margin:0; font-size:15px; line-height:1.7; opacity:.8; max-width:320px; }
   #start {
-    border: 0; border-radius: 999px; padding: 15px 38px;
-    background: var(--tide); color: #04222b; font-size: 16px; font-weight: 700;
-    font-family: inherit; cursor: pointer;
+    border:0; border-radius:999px; padding:15px 38px;
+    background:var(--tide); color:#04222b; font-size:16px; font-weight:700;
+    font-family:inherit; cursor:pointer;
   }
-  #start:focus-visible { outline: 3px solid var(--coral); outline-offset: 3px; }
-  #intro a { color: var(--tide); }
+  #start:focus-visible { outline:3px solid var(--coral); outline-offset:3px; }
+  #err { color:var(--coral); font-size:14px; display:none; }
 
-  /* 하단 컨트롤 */
   #hud {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
-    display: none; justify-content: center; align-items: center; gap: 10px;
-    padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    display:none; justify-content:center; align-items:center; gap:10px;
+    padding:14px 14px calc(14px + env(safe-area-inset-bottom));
   }
-  #hud.on { display: flex; }
+  #hud.on { display:flex; }
   .btn {
-    width: 54px; height: 54px; border: 0; border-radius: 50%;
-    background: rgba(6,35,46,.62); color: var(--foam);
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-    font-size: 22px; font-weight: 600; font-family: inherit; cursor: pointer;
+    width:54px; height:54px; border:0; border-radius:50%;
+    background:rgba(6,35,46,.62); color:var(--foam);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    font-size:22px; font-weight:600; font-family:inherit; cursor:pointer;
   }
-  .btn:active { background: var(--tide); color: #04222b; }
+  .btn:active { background:var(--tide); color:#04222b; }
   #scaleLabel {
-    min-width: 74px; text-align: center; padding: 12px 0; border-radius: 999px;
-    background: rgba(6,35,46,.62); color: var(--foam); font-size: 14px;
-    font-variant-numeric: tabular-nums;
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    min-width:74px; text-align:center; padding:12px 0; border-radius:999px;
+    background:rgba(6,35,46,.62); color:var(--foam); font-size:14px;
+    font-variant-numeric:tabular-nums;
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
   }
-
-  /* 마커 안내 */
-  #status {
-    position: fixed; top: calc(14px + env(safe-area-inset-top)); left: 50%;
-    transform: translateX(-50%); z-index: 20; display: none;
-    padding: 9px 16px; border-radius: 999px; font-size: 13px;
-    background: rgba(6,35,46,.62); color: var(--foam);
-    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  }
-  #status.on { display: block; }
-
-  .a-enter-vr, .a-enter-ar { display: none !important; }
 </style>
 </head>
 <body>
 
-<div id="intro">
-  <h1>물고기를 불러오는 AR</h1>
-  <p>아래 <b>Hiro 마커</b>를 인쇄하거나 다른 화면에 띄운 뒤, 카메라로 비추면 물고기 세 마리가 헤엄칩니다.</p>
-  <img src="https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png" alt="Hiro 마커">
-  <p><a href="https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png" target="_blank" rel="noopener">마커 이미지 원본 열기</a></p>
-  <button id="start">카메라 켜기</button>
-</div>
+<video id="cam" autoplay playsinline muted></video>
 
-<div id="status">마커를 비춰 주세요</div>
+<div id="intro">
+  <h1>물고기가 있는 방</h1>
+  <p>마커가 필요 없습니다. 카메라를 켜고 휴대폰을 천천히 돌리면 주변에 물고기가 헤엄치고 있습니다.</p>
+  <button id="start">카메라 켜기</button>
+  <p id="err"></p>
+</div>
 
 <div id="hud">
   <button class="btn" id="minus" aria-label="작게">−</button>
@@ -96,96 +80,96 @@
 </div>
 
 <script>
-/* ---------- 물고기 유영 컴포넌트 ---------- */
+/* ---------- 유영 ---------- */
 AFRAME.registerComponent('swim', {
   schema: {
-    radius:   { default: 0.7 },   // 원 궤도 반지름
-    speed:    { default: 0.5 },   // 회전 속도 (rad/s)
-    phase:    { default: 0 },     // 시작 위치 오프셋
-    height:   { default: 0.35 },  // 기본 높이
-    bob:      { default: 0.12 },  // 위아래 출렁임
-    wobble:   { default: 0.12 },  // 좌우 몸통 흔들림 (rad)
-    yawOffset:{ default: 0 }      // 모델이 바라보는 축 보정 (rad)
+    radius:{default:2.5}, speed:{default:0.25}, phase:{default:0},
+    height:{default:0}, bob:{default:0.3}, wobble:{default:0.1},
+    yawOffset:{default:0}
   },
-  init: function () { this.t = Math.random() * 10; },
-  tick: function (time, delta) {
+  init: function(){ this.t = 0; },
+  tick: function(time, delta){
     if (!delta) return;
     var d = this.data;
-    this.t += (delta / 1000) * d.speed;
-    var a = this.t + d.phase;
-    var o = this.el.object3D;
+    this.t += (delta/1000) * d.speed;
+    var a = this.t + d.phase, o = this.el.object3D;
     o.position.set(
       Math.cos(a) * d.radius,
-      d.height + Math.sin(a * 2) * d.bob,
+      d.height + Math.sin(a*2) * d.bob,
       Math.sin(a) * d.radius
     );
-    // 진행 방향(-sin a, cos a)을 바라보게 회전
-    o.rotation.set(0, -a + d.yawOffset, Math.sin(a * 6) * d.wobble);
+    o.rotation.set(0, -a + d.yawOffset, Math.sin(a*6) * d.wobble);
   }
 });
 
-/* ---------- 크기 조절 ---------- */
-var school, scale = 1;
-var MIN = 0.3, MAX = 4;
-
-function applyScale() {
+/* ---------- 크기 ---------- */
+var school, scale = 1, MIN = 0.1, MAX = 6;
+function applyScale(){
   scale = Math.min(MAX, Math.max(MIN, scale));
   if (school) school.object3D.scale.set(scale, scale, scale);
-  document.getElementById('scaleLabel').textContent = Math.round(scale * 100) + '%';
+  document.getElementById('scaleLabel').textContent = Math.round(scale*100) + '%';
 }
 
-window.addEventListener('DOMContentLoaded', function () {
-  school = document.getElementById('school');
+/* ---------- 카메라 + 자이로 ---------- */
+async function startCamera(){
+  var stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' } },
+    audio: false
+  });
+  document.getElementById('cam').srcObject = stream;
+}
 
-  document.getElementById('plus').onclick  = function () { scale *= 1.2; applyScale(); };
-  document.getElementById('minus').onclick = function () { scale /= 1.2; applyScale(); };
-  document.getElementById('reset').onclick = function () { scale = 1;    applyScale(); };
-
-  // 두 손가락 핀치 줌
-  var startDist = 0, startScale = 1;
-  function dist(t) {
-    var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
-    return Math.hypot(dx, dy);
+async function askGyro(){
+  // iOS 13+ 는 사용자 제스처 안에서 권한을 물어야 합니다
+  var DOE = window.DeviceOrientationEvent;
+  if (DOE && typeof DOE.requestPermission === 'function') {
+    try { await DOE.requestPermission(); } catch (e) { /* 거부해도 화면은 동작 */ }
   }
-  document.addEventListener('touchstart', function (e) {
-    if (e.touches.length === 2) { startDist = dist(e.touches); startScale = scale; }
-  }, { passive: true });
-  document.addEventListener('touchmove', function (e) {
-    if (e.touches.length === 2 && startDist > 0) {
+}
+
+window.addEventListener('DOMContentLoaded', function(){
+  school = document.getElementById('school');
+  applyScale();
+
+  document.getElementById('plus').onclick  = function(){ scale *= 1.2; applyScale(); };
+  document.getElementById('minus').onclick = function(){ scale /= 1.2; applyScale(); };
+  document.getElementById('reset').onclick = function(){ scale = 1;    applyScale(); };
+
+  var startDist = 0, startScale = 1;
+  function dist(t){ return Math.hypot(t[0].clientX-t[1].clientX, t[0].clientY-t[1].clientY); }
+  document.addEventListener('touchstart', function(e){
+    if (e.touches.length === 2){ startDist = dist(e.touches); startScale = scale; }
+  }, {passive:true});
+  document.addEventListener('touchmove', function(e){
+    if (e.touches.length === 2 && startDist > 0){
       e.preventDefault();
-      scale = startScale * (dist(e.touches) / startDist);
+      scale = startScale * (dist(e.touches)/startDist);
       applyScale();
     }
-  }, { passive: false });
-  document.addEventListener('touchend', function () { startDist = 0; }, { passive: true });
+  }, {passive:false});
+  document.addEventListener('touchend', function(){ startDist = 0; }, {passive:true});
 
-  // 시작 버튼: 사용자 제스처 이후에 씬을 붙여야 카메라 권한 요청이 안정적입니다
-  document.getElementById('start').onclick = function () {
-    document.getElementById('intro').style.display = 'none';
-    document.getElementById('hud').classList.add('on');
-    document.getElementById('status').classList.add('on');
-    document.getElementById('scene').setAttribute('visible', true);
+  document.getElementById('start').onclick = async function(){
+    var err = document.getElementById('err');
+    try {
+      await askGyro();
+      await startCamera();
+      document.getElementById('intro').style.display = 'none';
+      document.getElementById('hud').classList.add('on');
+    } catch (e) {
+      err.style.display = 'block';
+      err.textContent = '카메라를 열지 못했습니다. 주소가 https로 시작하는지, 브라우저 설정에서 카메라가 차단돼 있지 않은지 확인해 주세요.';
+    }
   };
-
-  // 마커 인식 상태 표시
-  var marker = document.getElementById('marker');
-  marker.addEventListener('markerFound', function () {
-    document.getElementById('status').classList.remove('on');
-  });
-  marker.addEventListener('markerLost', function () {
-    document.getElementById('status').classList.add('on');
-  });
-
-  applyScale();
 });
 </script>
 
 <a-scene
-  id="scene"
   embedded
   vr-mode-ui="enabled: false"
+  device-orientation-permission-ui="enabled: false"
   renderer="colorManagement: true; antialias: true; alpha: true"
-  arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono; patternRatio: 0.5;">
+  background="transparent: true">
 
   <a-assets>
     <a-asset-item id="fish1" src="Fish1.glb"></a-asset-item>
@@ -193,34 +177,22 @@ window.addEventListener('DOMContentLoaded', function () {
     <a-asset-item id="fish3" src="Fish3.glb"></a-asset-item>
   </a-assets>
 
-  <a-marker preset="hiro" id="marker" smooth="true" smoothCount="6" smoothTolerance="0.01" smoothThreshold="3">
-    <a-entity id="school">
+  <!-- 사람 눈높이에 카메라, 자이로로 둘러보기 -->
+  <a-entity camera position="0 1.6 0"
+            look-controls="touchEnabled: false; mouseEnabled: true; magicWindowTrackingEnabled: true"></a-entity>
 
-      <a-entity
-        gltf-model="#fish1"
-        animation-mixer
-        scale="0.05 0.05 0.05"
-        swim="radius: 0.75; speed: 0.55; phase: 0;    height: 0.35; bob: 0.10"></a-entity>
+  <!-- 물고기 무리: 카메라 주위를 돕니다 -->
+  <a-entity id="school" position="0 1.6 0">
+    <a-entity gltf-model="#fish1" animation-mixer scale="0.1 0.1 0.1"
+              swim="radius: 2.5; speed:  0.25; phase: 0;   height:  0.0; bob: 0.30"></a-entity>
+    <a-entity gltf-model="#fish2" animation-mixer scale="0.1 0.1 0.1"
+              swim="radius: 1.8; speed: -0.35; phase: 2.1; height:  0.6; bob: 0.25"></a-entity>
+    <a-entity gltf-model="#fish3" animation-mixer scale="0.1 0.1 0.1"
+              swim="radius: 3.4; speed:  0.18; phase: 4.2; height: -0.4; bob: 0.40"></a-entity>
+  </a-entity>
 
-      <a-entity
-        gltf-model="#fish2"
-        animation-mixer
-        scale="0.05 0.05 0.05"
-        swim="radius: 0.45; speed: -0.75; phase: 2.1; height: 0.55; bob: 0.14"></a-entity>
-
-      <a-entity
-        gltf-model="#fish3"
-        animation-mixer
-        scale="0.05 0.05 0.05"
-        swim="radius: 1.0; speed: 0.35; phase: 4.2;  height: 0.20; bob: 0.08"></a-entity>
-
-    </a-entity>
-
-    <a-light type="ambient" color="#cfeff5" intensity="0.9"></a-light>
-    <a-light type="directional" position="1 3 2" intensity="0.7"></a-light>
-  </a-marker>
-
-  <a-entity camera></a-entity>
+  <a-light type="ambient" color="#cfeff5" intensity="0.9"></a-light>
+  <a-light type="directional" position="1 3 2" intensity="0.7"></a-light>
 </a-scene>
 
 </body>
